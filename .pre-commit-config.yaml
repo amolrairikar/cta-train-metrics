@@ -34,3 +34,19 @@ repos:
         entry: pipenv run ruff format .
         language: system
         types: [python]
+      - id: run-unit-tests
+        name: Run unit tests
+        description: "Run unit tests locally to ensure all tests pass before committing code."
+        entry: pipenv run pytest --cov=lambdas tests/unit --cov-report=term-missing -vv
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+      - id: run-gtfs-data-fetch-live-dependency-tests
+        name: Run GTFS data fetch live dependency tests
+        description: "Run live dependency tests for fetching/updating GTFS data in S3."
+        entry: pipenv run behave -v --no-capture tests/live_dependency/gtfs_data_fetch
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
