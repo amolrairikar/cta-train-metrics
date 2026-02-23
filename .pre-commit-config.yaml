@@ -41,7 +41,7 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        always_run: true
+        files: ^lambdas/.*
       - id: run-gtfs-data-fetch-live-dependency-tests
         name: Run GTFS data fetch live dependency tests
         description: "Run live dependency tests for fetching/updating GTFS data in S3."
@@ -49,4 +49,4 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        always_run: true
+        files: ^lambdas/gtfs_data_fetch/.*
