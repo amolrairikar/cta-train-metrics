@@ -212,6 +212,7 @@ __marimo__/
 .terraform.tfstate.lock.info
 terraform.tfstate
 backend.hcl
+terraform.tfvars
 
 # Lambda deployment packages
 lambdas/*/deployment_package.zip

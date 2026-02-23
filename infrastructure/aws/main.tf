@@ -164,6 +164,18 @@ data "aws_iam_policy_document" "gtfs_data_fetch_lambda_policy_document" {
       "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/gtfs-data-fetch:*"
     ]
   }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "sns:Publish"
+    ]
+
+    resources = [
+      aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "gtfs_data_fetch_lambda_policy" {
@@ -190,6 +202,19 @@ resource "aws_lambda_function" "gtfs_data_fetch_lambda" {
   tags = {
     Project     = "cta-train-metrics"
     Environment = "PROD"
+  }
+}
+
+resource "aws_lambda_function_event_invoke_config" "gtfs_data_fetch_invoke_config" {
+  function_name = aws_lambda_function.gtfs_data_fetch_lambda.function_name
+
+  destination_config {
+    on_failure {
+      destination = aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+    }
+    on_success {
+      destination = aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+    }
   }
 }
 
@@ -241,4 +266,22 @@ resource "aws_scheduler_schedule" "gtfs_data_fetch_schedule" {
     arn      = aws_lambda_function.gtfs_data_fetch_lambda.arn
     role_arn = aws_iam_role.gtfs_data_fetch_scheduler_role.arn
   }
+}
+
+###########################################################################
+########################### SNS Topic for Notifications ####################
+###########################################################################
+resource "aws_sns_topic" "gtfs_fetch_lambda_execution_updates" {
+  name = "gtfs-fetch-lambda-execution-updates"
+
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+resource "aws_sns_topic_subscription" "gtfs_fetch_email_subscription" {
+  topic_arn = aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+  protocol  = "email"
+  endpoint  = var.notification_email
 }
