@@ -7,7 +7,14 @@ name = "pypi"
 python_version = "3.13"
 
 [packages]
+boto3 = "*"
+python-dotenv = "*"
 requests = "*"
 
 [dev-packages]
+behave = "*"
+boto3-stubs = "*"
 pre-commit = "*"
+pytest = "*"
+pytest-cov = "*"
+ruff = "*"
