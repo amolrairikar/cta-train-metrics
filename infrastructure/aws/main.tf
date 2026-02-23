@@ -102,7 +102,7 @@ data "aws_iam_policy_document" "lambda_assume_role_policy" {
 ######################### GTFS Data Fetch Lambda ##########################
 ###########################################################################
 resource "aws_iam_role" "gtfs_data_fetch_role" {
-  name               = "gtfs_data_fetch_role"
+  name               = "gtfs-data-fetch-role"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role_policy.json
   tags = {
     Project     = "cta-train-metrics"
@@ -167,7 +167,7 @@ data "aws_iam_policy_document" "gtfs_data_fetch_lambda_policy_document" {
 }
 
 resource "aws_iam_role_policy" "gtfs_data_fetch_lambda_policy" {
-  name   = "gtfs_data_fetch_lambda_policy"
+  name   = "gtfs-data-fetch-lambda-policy"
   role   = aws_iam_role.gtfs_data_fetch_role.id
   policy = data.aws_iam_policy_document.gtfs_data_fetch_lambda_policy_document.json
 }
@@ -198,7 +198,7 @@ resource "aws_lambda_function" "gtfs_data_fetch_lambda" {
 ###########################################################################
 
 resource "aws_iam_role" "gtfs_data_fetch_scheduler_role" {
-  name               = "gtfs_data_fetch_scheduler_role"
+  name               = "gtfs-data-fetch-scheduler-role"
   assume_role_policy = data.aws_iam_policy_document.scheduler_assume_role_policy.json
   tags = {
     Project     = "cta-train-metrics"
@@ -221,7 +221,7 @@ data "aws_iam_policy_document" "gtfs_data_fetch_scheduler_policy_document" {
 }
 
 resource "aws_iam_role_policy" "gtfs_data_fetch_scheduler_policy" {
-  name   = "gtfs_data_fetch_scheduler_policy"
+  name   = "gtfs-data-fetch-scheduler-policy"
   role   = aws_iam_role.gtfs_data_fetch_scheduler_role.id
   policy = data.aws_iam_policy_document.gtfs_data_fetch_scheduler_policy_document.json
 }
