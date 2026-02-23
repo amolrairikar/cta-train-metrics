@@ -5,8 +5,6 @@
   *
 * **Why is this change necessary?**
   *
-* **How does it affect the analytics output?**
-  *
 
 ## AWS Infrastructure Changes
 * [ ] Does this PR modify infrastructure (Terraform)?
