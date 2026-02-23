@@ -11,7 +11,7 @@ if [ -f "deployment_package.zip" ]; then
 fi
 
 # Copy the Dockerfile from the root of the lambdas directory
-cp ../../Dockerfile .
+cp ../Dockerfile .
 
 # Remove any stale containers/images
 docker rm -f temp-step-fn-lambda-packager 2>/dev/null || true
