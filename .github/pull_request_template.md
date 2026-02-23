@@ -1,18 +1,21 @@
 # Pull Request
 
 ## Description
-* **What does this change do?** (e.g., adding a new data transformation step, updating an IAM policy).
-* **Why is this change necessary?** (e.g., addressing a Jira ticket, optimizing performance, securing a resource).
+* **What does this change do?**
+  *
+* **Why is this change necessary?**
+  *
 * **How does it affect the analytics output?**
+  *
 
 ## AWS Infrastructure Changes
-* [ ] Does this PR modify infrastructure (Terraform, Pulumi, CloudFormation, or Boto3 scripts)?
+* [ ] Does this PR modify infrastructure (Terraform)?
 * [ ] Have you verified the IAM permissions are using the Principle of Least Privilege?
 * [ ] List any new resources being created or destroyed:
     * 
 
 ## Local Testing Checklist
-* [ ] **Code Style:** Ran `black`, `flake8`, or `isort`.
+* [ ] **Code Style:** Ran `ruff` linter and formatter.
 * [ ] **Unit Tests:** Ran `pytest` and all tests passed.
-* [ ] **Integration Tests:** Ran tests against local environment/mocked AWS services.
-* [ ] **Dependencies:** Updated `requirements.txt` or `pyproject.toml` if new packages were added.
+* [ ] **Integration Tests:** Ran tests from local environment with live calls to AWS services.
+* [ ] **Dependencies:** Updated `Pipfile` if new packages were added.
