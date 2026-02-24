@@ -2,13 +2,15 @@
 Step definitions for GTFS data fetch feature tests.
 """
 
-import os
 import datetime
+import os
+
 import boto3
 import requests
 from behave import given, when, then
 from behave import use_step_matcher
 from dotenv import load_dotenv
+
 from lambdas.gtfs_data_fetch.main import handler, get_last_modified_time
 
 load_dotenv()
