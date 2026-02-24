@@ -110,21 +110,6 @@ resource "aws_iam_role" "gtfs_data_fetch_role" {
   }
 }
 
-data "aws_iam_policy_document" "scheduler_assume_role_policy" {
-  statement {
-    effect = "Allow"
-
-    principals {
-      type        = "Service"
-      identifiers = ["scheduler.amazonaws.com"]
-    }
-
-    actions = [
-      "sts:AssumeRole"
-    ]
-  }
-}
-
 data "aws_iam_policy_document" "gtfs_data_fetch_lambda_policy_document" {
   statement {
     effect = "Allow"
@@ -173,7 +158,7 @@ data "aws_iam_policy_document" "gtfs_data_fetch_lambda_policy_document" {
     ]
 
     resources = [
-      aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+      aws_sns_topic.lambda_status_execution_updates.arn
     ]
   }
 }
@@ -205,15 +190,15 @@ resource "aws_lambda_function" "gtfs_data_fetch_lambda" {
   }
 }
 
-resource "aws_lambda_function_event_invoke_config" "gtfs_data_fetch_invoke_config" {
+resource "aws_lambda_function_event_invoke_config" "gtfs_data_fetch_status_sns" {
   function_name = aws_lambda_function.gtfs_data_fetch_lambda.function_name
 
   destination_config {
     on_failure {
-      destination = aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+      destination = aws_sns_topic.lambda_status_execution_updates.arn
     }
     on_success {
-      destination = aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
+      destination = aws_sns_topic.lambda_status_execution_updates.arn
     }
   }
 }
@@ -221,6 +206,21 @@ resource "aws_lambda_function_event_invoke_config" "gtfs_data_fetch_invoke_confi
 ###########################################################################
 #################### GTFS Data Fetch Lambda Scheduler #####################
 ###########################################################################
+
+data "aws_iam_policy_document" "scheduler_assume_role_policy" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["scheduler.amazonaws.com"]
+    }
+
+    actions = [
+      "sts:AssumeRole"
+    ]
+  }
+}
 
 resource "aws_iam_role" "gtfs_data_fetch_scheduler_role" {
   name               = "gtfs-data-fetch-scheduler-role"
@@ -269,19 +269,112 @@ resource "aws_scheduler_schedule" "gtfs_data_fetch_schedule" {
 }
 
 ###########################################################################
-########################### SNS Topic for Notifications ####################
+########## SNS Topic for Lambda Execution Status Notifications ###########
 ###########################################################################
-resource "aws_sns_topic" "gtfs_fetch_lambda_execution_updates" {
-  name = "gtfs-fetch-lambda-execution-updates"
+resource "aws_sns_topic" "lambda_status_execution_updates" {
+  name = "lambda-status-execution-updates"
 
+  tags = {
+    Project     = "cta-analytics-app"
+    Environment = "PROD"
+  }
+}
+
+resource "aws_sns_topic_subscription" "lambda_execution_status_email_subscription" {
+  topic_arn = aws_sns_topic.lambda_status_execution_updates.arn
+  protocol  = "email"
+  endpoint  = var.notification_email
+}
+
+###########################################################################
+###################### GTFS Expected Schedule Lambda ######################
+###########################################################################
+resource "aws_iam_role" "gtfs_expected_schedule_role" {
+  name               = "gtfs-expected-schedule-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role_policy.json
   tags = {
     Project     = "cta-train-metrics"
     Environment = "PROD"
   }
 }
 
-resource "aws_sns_topic_subscription" "gtfs_fetch_email_subscription" {
-  topic_arn = aws_sns_topic.gtfs_fetch_lambda_execution_updates.arn
-  protocol  = "email"
-  endpoint  = var.notification_email
+data "aws_iam_policy_document" "gtfs_expected_schedule_lambda_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "s3:PutObject",
+      "s3:GetObject"
+    ]
+
+    resources = [
+      "arn:aws:s3:::${local.account_id}-cta-analytics-project/*"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = [
+      "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/gtfs-expected-schedule:*"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "sns:Publish"
+    ]
+
+    resources = [
+      aws_sns_topic.lambda_status_execution_updates.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "gtfs_expected_schedule_lambda_policy" {
+  name   = "gtfs-expected-schedule-lambda-policy"
+  role   = aws_iam_role.gtfs_expected_schedule_role.id
+  policy = data.aws_iam_policy_document.gtfs_expected_schedule_lambda_policy_document.json
+}
+
+resource "aws_lambda_function" "gtfs_expected_schedule_lambda" {
+  function_name                  = "gtfs-expected-schedule"
+  description                    = "Lambda function to create CTA expected schedule from GTFS data"
+  role                           = aws_iam_role.gtfs_expected_schedule_role.arn
+  handler                        = "lambdas.gtfs_expected_schedule.main.handler"
+  runtime                        = "python3.13"
+  filename                       = "../../lambdas/gtfs_data_fetch/deployment_package.zip"
+  source_code_hash               = filebase64sha256("../../lambdas/gtfs_data_fetch/deployment_package.zip")
+  timeout                        = 60
+  memory_size                    = 2048
+  environment {
+    variables = {
+      ACCOUNT_NUMBER = local.account_id
+    }
+  }
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+resource "aws_lambda_function_event_invoke_config" "gtfs_expected_schedule_invoke_config" {
+  function_name = aws_lambda_function.gtfs_expected_schedule_lambda.function_name
+
+  destination_config {
+    on_failure {
+      destination = aws_sns_topic.lambda_status_execution_updates.arn
+    }
+    on_success {
+      destination = aws_sns_topic.lambda_status_execution_updates.arn
+    }
+  }
 }
