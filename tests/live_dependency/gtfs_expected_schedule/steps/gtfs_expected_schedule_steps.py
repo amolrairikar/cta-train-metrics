@@ -57,6 +57,6 @@ def step_expected_schedule_saved(context):
     bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
     s3_client = boto3.client("s3")
     response = s3_client.head_object(
-        Bucket=bucket_name, Key="gtfs_expected_cta_schedule.csv"
+        Bucket=bucket_name, Key="gtfs_expected_cta_schedule/20260106.csv"
     )
     assert response["ContentLength"] > 0, "Expected schedule file is empty"
