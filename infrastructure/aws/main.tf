@@ -173,7 +173,7 @@ resource "aws_lambda_function" "gtfs_data_fetch_lambda" {
   function_name                  = "gtfs-data-fetch"
   description                    = "Lambda function to fetch GTFS data"
   role                           = aws_iam_role.gtfs_data_fetch_role.arn
-  handler                        = "lambdas.gtfs_data_fetch.main.handler"
+  handler                        = "main.handler"
   runtime                        = "python3.13"
   filename                       = "../../lambdas/gtfs_data_fetch/deployment_package.zip"
   source_code_hash               = filebase64sha256("../../lambdas/gtfs_data_fetch/deployment_package.zip")
@@ -200,71 +200,6 @@ resource "aws_lambda_function_event_invoke_config" "gtfs_data_fetch_status_sns" 
     on_success {
       destination = aws_sns_topic.lambda_status_execution_updates.arn
     }
-  }
-}
-
-###########################################################################
-#################### GTFS Data Fetch Lambda Scheduler #####################
-###########################################################################
-
-data "aws_iam_policy_document" "scheduler_assume_role_policy" {
-  statement {
-    effect = "Allow"
-
-    principals {
-      type        = "Service"
-      identifiers = ["scheduler.amazonaws.com"]
-    }
-
-    actions = [
-      "sts:AssumeRole"
-    ]
-  }
-}
-
-resource "aws_iam_role" "gtfs_data_fetch_scheduler_role" {
-  name               = "gtfs-data-fetch-scheduler-role"
-  assume_role_policy = data.aws_iam_policy_document.scheduler_assume_role_policy.json
-  tags = {
-    Project     = "cta-train-metrics"
-    Environment = "PROD"
-  }
-}
-
-data "aws_iam_policy_document" "gtfs_data_fetch_scheduler_policy_document" {
-  statement {
-    effect = "Allow"
-
-    actions = [
-      "lambda:InvokeFunction"
-    ]
-
-    resources = [
-      aws_lambda_function.gtfs_data_fetch_lambda.arn
-    ]
-  }
-}
-
-resource "aws_iam_role_policy" "gtfs_data_fetch_scheduler_policy" {
-  name   = "gtfs-data-fetch-scheduler-policy"
-  role   = aws_iam_role.gtfs_data_fetch_scheduler_role.id
-  policy = data.aws_iam_policy_document.gtfs_data_fetch_scheduler_policy_document.json
-}
-
-resource "aws_scheduler_schedule" "gtfs_data_fetch_schedule" {
-  name                         = "gtfs-data-fetch-trigger"
-  description                  = "Trigger GTFS data fetch every night at midnight CST"
-  schedule_expression          = "cron(0 0 * * ? *)"
-  schedule_expression_timezone = "America/Chicago"
-  state                        = "ENABLED"
-  
-  flexible_time_window {
-    mode = "OFF"
-  }
-  
-  target {
-    arn      = aws_lambda_function.gtfs_data_fetch_lambda.arn
-    role_arn = aws_iam_role.gtfs_data_fetch_scheduler_role.arn
   }
 }
 
@@ -349,7 +284,7 @@ resource "aws_lambda_function" "gtfs_expected_schedule_lambda" {
   function_name                  = "gtfs-expected-schedule"
   description                    = "Lambda function to create CTA expected schedule from GTFS data"
   role                           = aws_iam_role.gtfs_expected_schedule_role.arn
-  handler                        = "lambdas.gtfs_expected_schedule.main.handler"
+  handler                        = "main.handler"
   runtime                        = "python3.13"
   filename                       = "../../lambdas/gtfs_data_fetch/deployment_package.zip"
   source_code_hash               = filebase64sha256("../../lambdas/gtfs_data_fetch/deployment_package.zip")
@@ -376,5 +311,158 @@ resource "aws_lambda_function_event_invoke_config" "gtfs_expected_schedule_invok
     on_success {
       destination = aws_sns_topic.lambda_status_execution_updates.arn
     }
+  }
+}
+
+###########################################################################
+######################### Lambda Orchestrator #############################
+###########################################################################
+data "aws_iam_policy_document" "sfn_assume_role_policy" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
+    }
+
+    actions = [
+      "sts:AssumeRole"
+    ]
+  }
+}
+
+resource "aws_iam_role" "step_functions_role" {
+  name = "gtfs-lambda-orchestrator-sfn-role"
+  assume_role_policy = data.aws_iam_policy_document.sfn_assume_role_policy.json
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+data "aws_iam_policy_document" "gtfs_sfn_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "lambda:InvokeFunction"
+    ]
+
+    resources = [
+      aws_lambda_function.gtfs_data_fetch_lambda.arn,
+      aws_lambda_function.gtfs_expected_schedule_lambda.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "gtfs_sfn_policy" {
+  name   = "gtfs-sfn-policy"
+  role   = aws_iam_role.step_functions_role.id
+  policy = data.aws_iam_policy_document.gtfs_sfn_policy_document.json
+}
+
+resource "aws_sfn_state_machine" "gtfs_lambda_orchestrator" {
+  name     = "gtfs-lambda-orchestrator"
+  role_arn = aws_iam_role.step_functions_role.arn
+
+  definition = jsonencode({
+    StartAt = "Lambda1"
+    States = {
+      Lambda1 = {
+        Type     = "Task"
+        Resource = aws_lambda_function.gtfs_data_fetch_lambda.arn
+        Next     = "FileCheckChoice"
+      }
+      FileCheckChoice = {
+        Type = "Choice"
+        Choices = [
+          {
+            Variable     = "$.status"
+            StringEquals = "updated"
+            Next         = "Lambda2"
+          }
+        ]
+        Default = "Done"
+      }
+      Lambda2 = {
+        Type     = "Task"
+        Resource = aws_lambda_function.gtfs_expected_schedule_lambda.arn
+        End      = true
+      }
+      Done = {
+        Type = "Succeed"
+      }
+    }
+  })
+
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+###########################################################################
+######################## GTFS Data SFN Scheduler ##########################
+###########################################################################
+
+data "aws_iam_policy_document" "scheduler_assume_role_policy" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["scheduler.amazonaws.com"]
+    }
+
+    actions = [
+      "sts:AssumeRole"
+    ]
+  }
+}
+
+resource "aws_iam_role" "gtfs_data_fetch_scheduler_role" {
+  name               = "gtfs-data-fetch-scheduler-role"
+  assume_role_policy = data.aws_iam_policy_document.scheduler_assume_role_policy.json
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+data "aws_iam_policy_document" "gtfs_data_fetch_scheduler_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "states:StartExecution"
+    ]
+
+    resources = [
+      aws_sfn_state_machine.gtfs_lambda_orchestrator.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "gtfs_data_fetch_scheduler_policy" {
+  name   = "gtfs-data-fetch-scheduler-policy"
+  role   = aws_iam_role.gtfs_data_fetch_scheduler_role.id
+  policy = data.aws_iam_policy_document.gtfs_data_fetch_scheduler_policy_document.json
+}
+
+resource "aws_scheduler_schedule" "gtfs_data_fetch_schedule" {
+  name                         = "gtfs-data-fetch-trigger"
+  description                  = "Trigger GTFS data fetch every night at midnight CST"
+  schedule_expression          = "cron(0 0 * * ? *)"
+  schedule_expression_timezone = "America/Chicago"
+  state                        = "ENABLED"
+  
+  flexible_time_window {
+    mode = "OFF"
+  }
+  
+  target {
+    arn      = aws_sfn_state_machine.gtfs_lambda_orchestrator.arn
+    role_arn = aws_iam_role.gtfs_data_fetch_scheduler_role.arn
   }
 }

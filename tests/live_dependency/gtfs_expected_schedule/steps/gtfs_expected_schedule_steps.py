@@ -5,12 +5,12 @@ Step definitions for GTFS expected schedule feature tests.
 import os
 
 import boto3
-import dotenv
 from behave import given, when, then
+from dotenv import load_dotenv
 
 from lambdas.gtfs_expected_schedule.main import handler
 
-dotenv.load_dotenv()
+load_dotenv()
 
 
 @given("GTFS data is available")

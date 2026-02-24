@@ -58,3 +58,11 @@ repos:
         types: [python]
         pass_filenames: false
         files: ^lambdas/gtfs_expected_schedule/.*
+      - id: run-e2e-tests
+        name: Run E2E tests
+        description: "Run E2E tests."
+        entry: pipenv run behave -v --no-capture tests/e2e/gtfs_sfn
+        language: system
+        types: [python]
+        pass_filenames: false
+        files: ^lambdas/.*
