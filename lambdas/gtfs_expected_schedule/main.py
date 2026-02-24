@@ -24,6 +24,9 @@ stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 logger.setLevel(logging.DEBUG)
 
+# Only needed for local testing, will do nothing in Lambda environment
+dotenv.load_dotenv()
+
 GTFS_FILES = [
     "calendar.txt",
     "routes.txt",
@@ -70,7 +73,7 @@ def read_gtfs_data() -> dict[str, pd.DataFrame]:
     return dataframes
 
 
-def processs_gtfs_data(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def processs_gtfs_data(dataframes: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, str]:
     """
     Process GTFS data to construct expected train schedule.
 
@@ -78,7 +81,7 @@ def processs_gtfs_data(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         dataframes (dict[str, pd.DataFrame]): Dictionary of dataframes keyed by filename.
 
     Returns:
-        pd.DataFrame: Processed dataframe with expected CTA train schedule.
+        tuple: Processed dataframe with expected CTA train schedule and effective date of schedule.
     """
     # Step 0: Set up dataframes
     calendar_df = dataframes["calendar"]
@@ -88,7 +91,7 @@ def processs_gtfs_data(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
     trips_df = dataframes["trips"]
 
     # Step 1: Select relevant columns from each dataframe and perform filtering
-    calendar_df_filtered = calendar_df.drop(columns=["start_date", "end_date"])
+    calendar_df_filtered = calendar_df.copy()
     routes_df_filtered = (
         routes_df[["route_id", "route_long_name", "route_color"]]
         .query("route_long_name in @TRAIN_LINES")
@@ -122,15 +125,20 @@ def processs_gtfs_data(dataframes: dict[str, pd.DataFrame]) -> pd.DataFrame:
         left=combined_df, right=stops_df_filtered, on="stop_id", how="inner"
     ).drop(columns=["index"])
     logger.info(f"Combined dataframe shape: {combined_df.shape}")
-    return combined_df
+
+    # Step 3: Get schedule effective date for reporting purposes
+    schedule_effective_date = calendar_df_filtered["start_date"].min()
+    logger.info(f"Schedule effective date: {schedule_effective_date}")
+    return combined_df, schedule_effective_date
 
 
-def save_to_s3(df: pd.DataFrame):
+def save_to_s3(df: pd.DataFrame, schedule_effective_date: str):
     """
     Save a Pandas dataframe to S3.
 
     Args:
         df (pd.DataFrame): The dataframe to save.
+        schedule_effective_date (str): The effective date of the current schedule.
     """
     s3_client = boto3.client("s3")
     bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
@@ -138,7 +146,7 @@ def save_to_s3(df: pd.DataFrame):
     try:
         s3_client.put_object(
             Bucket=bucket_name,
-            Key="gtfs_expected_cta_schedule.csv",
+            Key=f"gtfs_expected_cta_schedule/{schedule_effective_date}.csv",
             Body=df.to_csv(index=False),
         )
     except botocore.exceptions.ClientError as e:
@@ -159,10 +167,9 @@ def handler(event, context):
     logger.info("Event data: %s", event)
     logger.info("Context data: %s", context)
 
-    # Only needed for local testing, will do nothing in Lambda environment
-    dotenv.load_dotenv()
-
     # Read, process, and save to S3
     dataframes = read_gtfs_data()
-    expected_schedule = processs_gtfs_data(dataframes=dataframes)
-    save_to_s3(df=expected_schedule)
+    expected_schedule, schedule_effective_date = processs_gtfs_data(
+        dataframes=dataframes
+    )
+    save_to_s3(df=expected_schedule, schedule_effective_date=schedule_effective_date)

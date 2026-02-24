@@ -93,7 +93,10 @@ class TestProcessGtfsData(unittest.TestCase):
 
         # Assert
         self.assertIsNotNone(result)
-        self.assertIsInstance(result, MagicMock)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+        self.assertIsInstance(result[0], MagicMock)
+        self.assertIsInstance(result[1], MagicMock)
 
 
 class TestSaveToS3(unittest.TestCase):
@@ -108,13 +111,13 @@ class TestSaveToS3(unittest.TestCase):
         mock_boto3_client.return_value.put_object.return_value = None
 
         # Act
-        save_to_s3(df=df)
+        save_to_s3(df=df, schedule_effective_date="20260101")
 
         # Assert
         df.to_csv.assert_called_once_with(index=False)
         mock_boto3_client.return_value.put_object.assert_called_once_with(
             Bucket="123456789012-cta-analytics-project",
-            Key="gtfs_expected_cta_schedule.csv",
+            Key="gtfs_expected_cta_schedule/20260101.csv",
             Body="csv_data",
         )
 
@@ -135,13 +138,13 @@ class TestSaveToS3(unittest.TestCase):
 
         # Act
         with pytest.raises(botocore.exceptions.ClientError):
-            save_to_s3(df=df)
+            save_to_s3(df=df, schedule_effective_date="20260101")
 
         # Assert
         df.to_csv.assert_called_once_with(index=False)
         mock_boto3_client.return_value.put_object.assert_called_once_with(
             Bucket="123456789012-cta-analytics-project",
-            Key="gtfs_expected_cta_schedule.csv",
+            Key="gtfs_expected_cta_schedule/20260101.csv",
             Body="csv_data",
         )
 
@@ -158,7 +161,7 @@ class TestHandler(unittest.TestCase):
         """Tests successful handler execution."""
         # Arrange
         mock_read_gtfs_data.return_value = [MagicMock(), MagicMock()]
-        mock_process_gtfs_data.return_value = MagicMock()
+        mock_process_gtfs_data.return_value = (MagicMock(), "20260101")
         mock_save_to_s3.return_value = None
 
         # Act
@@ -172,4 +175,7 @@ class TestHandler(unittest.TestCase):
                 mock_read_gtfs_data.return_value[1],
             ]
         )
-        mock_save_to_s3.assert_called_once_with(df=mock_process_gtfs_data.return_value)
+        mock_save_to_s3.assert_called_once_with(
+            df=mock_process_gtfs_data.return_value[0],
+            schedule_effective_date="20260101",
+        )
