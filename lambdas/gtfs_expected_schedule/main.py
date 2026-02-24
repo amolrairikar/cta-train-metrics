@@ -7,14 +7,8 @@ import logging
 import os
 import sys
 
-import boto3
-import botocore.exceptions
-import dotenv
-import pandas as pd
-
-# For debugging purposes
-pd.set_option("display.max_columns", None)
-pd.set_option("display.max_rows", None)
+import duckdb
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 stream_handler = logging.StreamHandler(sys.stdout)
@@ -25,134 +19,27 @@ logger.addHandler(stream_handler)
 logger.setLevel(logging.DEBUG)
 
 # Only needed for local testing, will do nothing in Lambda environment
-dotenv.load_dotenv()
-
-GTFS_FILES = [
-    "calendar.txt",
-    "routes.txt",
-    "stops.txt",
-    "stop_times.txt",
-    "trips.txt",
-]
-TRAIN_LINES = [
-    "Red Line",
-    "Purple Line",
-    "Yellow Line",
-    "Blue Line",
-    "Pink Line",
-    "Green Line",
-    "Orange Line",
-    "Brown Line",
-]
+load_dotenv()
 
 
-def read_gtfs_data() -> dict[str, pd.DataFrame]:
+def get_db_connection() -> duckdb.DuckDBPyConnection:
     """
-    Read GTFS data from S3.
+    Create DuckDB connection to S3.
 
     Returns:
-        dict[str, pd.DataFrame]: Dictionary of dataframes keyed by filename.
+        duckdb.DuckDBPyConnection: The DuckDB connection
     """
-    bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
-    prefix = "gtfs_data/"
-    s3_client = boto3.client("s3")
+    con = duckdb.connect(database=":memory:")
 
-    dataframes = {}
-
-    for file in GTFS_FILES:
-        try:
-            response = s3_client.get_object(Bucket=bucket_name, Key=f"{prefix}{file}")
-        except botocore.exceptions.ClientError as e:
-            logger.error(f"Error reading {file}: {e}")
-            raise
-
-        df_name = file.replace(".txt", "")
-        dataframes[df_name] = pd.read_csv(response["Body"])
-        logger.info(f"Successfully read {file}")
-
-    return dataframes
-
-
-def processs_gtfs_data(dataframes: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, str]:
-    """
-    Process GTFS data to construct expected train schedule.
-
-    Args:
-        dataframes (dict[str, pd.DataFrame]): Dictionary of dataframes keyed by filename.
-
-    Returns:
-        tuple: Processed dataframe with expected CTA train schedule and effective date of schedule.
-    """
-    # Step 0: Set up dataframes
-    calendar_df = dataframes["calendar"]
-    routes_df = dataframes["routes"]
-    stops_df = dataframes["stops"]
-    stop_times_df = dataframes["stop_times"]
-    trips_df = dataframes["trips"]
-
-    # Step 1: Select relevant columns from each dataframe and perform filtering
-    calendar_df_filtered = calendar_df.copy()
-    routes_df_filtered = (
-        routes_df[["route_id", "route_long_name", "route_color"]]
-        .query("route_long_name in @TRAIN_LINES")
-        .reset_index()
-    )
-    stops_df_filtered = (
-        stops_df[["stop_id", "stop_name"]]
-        .query("stop_id >= 30000 and stop_id < 40000")
-        .reset_index()
-    )
-    stop_times_df_filtered = (
-        stop_times_df[
-            ["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"]
-        ]
-        .query("stop_id >= 30000 and stop_id < 40000")
-        .reset_index()
-    )
-    trips_df_filtered = trips_df[["route_id", "service_id", "trip_id", "direction_id"]]
-
-    # Step 2: Join all dataframes together to construct expected schedule
-    combined_df = pd.merge(
-        left=routes_df_filtered, right=trips_df_filtered, on="route_id", how="inner"
-    ).drop(columns=["index"])
-    combined_df = pd.merge(
-        left=combined_df, right=calendar_df_filtered, on="service_id", how="inner"
-    )
-    combined_df = pd.merge(
-        left=combined_df, right=stop_times_df_filtered, on="trip_id", how="inner"
-    ).drop(columns=["index"])
-    combined_df = pd.merge(
-        left=combined_df, right=stops_df_filtered, on="stop_id", how="inner"
-    ).drop(columns=["index"])
-    logger.info(f"Combined dataframe shape: {combined_df.shape}")
-
-    # Step 3: Get schedule effective date for reporting purposes
-    schedule_effective_date = calendar_df_filtered["start_date"].min()
-    logger.info(f"Schedule effective date: {schedule_effective_date}")
-    return combined_df, schedule_effective_date
-
-
-def save_to_s3(df: pd.DataFrame, schedule_effective_date: str):
-    """
-    Save a Pandas dataframe to S3.
-
-    Args:
-        df (pd.DataFrame): The dataframe to save.
-        schedule_effective_date (str): The effective date of the current schedule.
-    """
-    s3_client = boto3.client("s3")
-    bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
-    logger.info("Writing file to S3...")
-    try:
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key=f"gtfs_expected_cta_schedule/{schedule_effective_date}.csv",
-            Body=df.to_csv(index=False),
-        )
-    except botocore.exceptions.ClientError as e:
-        logger.error(f"Error writing to S3: {e}")
-        raise
-    logger.info("Successfully wrote file to S3")
+    # Register the credential chain. This automatically looks for ~/.aws/credentials (local)
+    # or execution role (Lambda/EC2)
+    con.execute("""
+        CREATE OR REPLACE SECRET s3_creds (
+            TYPE S3, 
+            PROVIDER CREDENTIAL_CHAIN
+        );
+    """)
+    return con
 
 
 def handler(event, context):
@@ -167,9 +54,70 @@ def handler(event, context):
     logger.info("Event data: %s", event)
     logger.info("Context data: %s", context)
 
-    # Read, process, and save to S3
-    dataframes = read_gtfs_data()
-    expected_schedule, schedule_effective_date = processs_gtfs_data(
-        dataframes=dataframes
-    )
-    save_to_s3(df=expected_schedule, schedule_effective_date=schedule_effective_date)
+    con = get_db_connection()
+    bucket = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
+    prefix = f"s3://{bucket}/gtfs_data/"
+
+    # Read all input files
+    files = ["calendar", "routes", "stops", "stop_times", "trips"]
+    for f in files:
+        logger.info("Reading %s.txt", f)
+        con.execute(
+            f"CREATE VIEW {f} AS SELECT * FROM read_csv_auto('{prefix}{f}.txt')"
+        )
+        logger.info("Successfully read %s.txt as view %s", f, f)
+
+    # Query to join all data together
+    query = """
+        SELECT
+            r.route_id,
+            r.route_long_name,
+            r.route_color,
+            t.service_id,
+            t.trip_id,
+            t.direction,
+            t.direction_id,
+            c.monday,
+            c.tuesday,
+            c.wednesday,
+            c.thursday,
+            c.friday,
+            c.saturday,
+            c.sunday,
+            c.start_date,
+            c.end_date,
+            st.arrival_time,
+            st.departure_time,
+            st.stop_id,
+            st.stop_sequence,
+            s.stop_name
+        FROM routes r
+        JOIN trips t ON r.route_id = t.route_id
+        JOIN calendar c ON t.service_id = c.service_id
+        JOIN stop_times st ON t.trip_id = st.trip_id
+        JOIN stops s ON st.stop_id = s.stop_id
+        WHERE r.route_long_name IN (
+            'Red Line',
+            'Purple Line',
+            'Yellow Line',
+            'Blue Line', 
+            'Pink Line',
+            'Green Line',
+            'Orange Line',
+            'Brown Line'
+        )
+        AND s.stop_id >= 30000 AND s.stop_id < 40000
+    """
+
+    # Query to get effective date
+    result = con.execute("SELECT MIN(start_date) FROM calendar").fetchone()
+    if not result or result[0] is None:
+        raise ValueError("No start_date found")
+    effective_date = result[0]
+
+    # Write output as Parquet to S3
+    output_path = f"s3://{bucket}/gtfs_expected_cta_schedule/{effective_date}.parquet"
+    con.execute(f"COPY ({query}) TO '{output_path}' (FORMAT PARQUET)")
+    logger.info("Successfully wrote output parquet file to S3")
+
+    return {"status": "success", "effective_date": effective_date}

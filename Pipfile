@@ -8,7 +8,7 @@ python_version = "3.13"
 
 [packages]
 boto3 = "*"
-pandas = "*"
+duckdb = "*"
 python-dotenv = "*"
 requests = "*"
 streamlit = "*"
