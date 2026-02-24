@@ -11,6 +11,7 @@ boto3 = "*"
 pandas = "*"
 python-dotenv = "*"
 requests = "*"
+streamlit = "*"
 
 [dev-packages]
 behave = "*"

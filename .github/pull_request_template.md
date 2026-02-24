@@ -10,7 +10,7 @@
 - [ ] Does this PR modify infrastructure (Terraform)?
 - [ ] Have you verified the IAM permissions are using the Principle of Least Privilege?
 - [ ] List any new resources being created or destroyed:
-    - 
+  - 
 
 ## Local Testing Checklist
 - [ ] **Code Style:** Ran `ruff` linter and formatter.
