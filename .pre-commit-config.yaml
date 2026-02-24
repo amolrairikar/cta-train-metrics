@@ -50,3 +50,11 @@ repos:
         types: [python]
         pass_filenames: false
         files: ^lambdas/gtfs_data_fetch/.*
+      - id: run-gtfs-expected-schedule-live-dependency-tests
+        name: Run GTFS expected schedule live dependency tests
+        description: "Run live dependency tests for generating expected schedule from GTFS data."
+        entry: pipenv run behave -v --no-capture tests/live_dependency/gtfs_expected_schedule
+        language: system
+        types: [python]
+        pass_filenames: false
+        files: ^lambdas/gtfs_expected_schedule/.*
