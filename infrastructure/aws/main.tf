@@ -286,8 +286,8 @@ resource "aws_lambda_function" "gtfs_expected_schedule_lambda" {
   role                           = aws_iam_role.gtfs_expected_schedule_role.arn
   handler                        = "main.handler"
   runtime                        = "python3.13"
-  filename                       = "../../lambdas/gtfs_data_fetch/deployment_package.zip"
-  source_code_hash               = filebase64sha256("../../lambdas/gtfs_data_fetch/deployment_package.zip")
+  filename                       = "../../lambdas/gtfs_expected_schedule/deployment_package.zip"
+  source_code_hash               = filebase64sha256("../../lambdas/gtfs_expected_schedule/deployment_package.zip")
   timeout                        = 60
   memory_size                    = 2048
   environment {
