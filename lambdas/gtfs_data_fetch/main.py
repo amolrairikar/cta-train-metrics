@@ -110,13 +110,13 @@ def upload_gtfs_zip_to_s3(response: requests.Response):
                     continue
 
 
-def handler(event, context):
+def handler(event, context) -> dict[str, str]:
     """
     Lambda handler function to fetch GTFS data and store it in S3.
 
     Args:
-        event (dict): The event data that triggered the Lambda function.
-        _context (LambdaContext): The context in which the Lambda function is running.
+        event: The event data that triggered the Lambda function.
+        context: The context in which the Lambda function is running.
 
     Returns:
         dict: A response indicating the success of the operation.
