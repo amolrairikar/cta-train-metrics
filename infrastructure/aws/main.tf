@@ -149,18 +149,6 @@ data "aws_iam_policy_document" "gtfs_data_fetch_lambda_policy_document" {
       "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/gtfs-data-fetch:*"
     ]
   }
-
-  statement {
-    effect = "Allow"
-
-    actions = [
-      "sns:Publish"
-    ]
-
-    resources = [
-      aws_sns_topic.lambda_status_execution_updates.arn
-    ]
-  }
 }
 
 resource "aws_iam_role_policy" "gtfs_data_fetch_lambda_policy" {
@@ -188,37 +176,6 @@ resource "aws_lambda_function" "gtfs_data_fetch_lambda" {
     Project     = "cta-train-metrics"
     Environment = "PROD"
   }
-}
-
-resource "aws_lambda_function_event_invoke_config" "gtfs_data_fetch_status_sns" {
-  function_name = aws_lambda_function.gtfs_data_fetch_lambda.function_name
-
-  destination_config {
-    on_failure {
-      destination = aws_sns_topic.lambda_status_execution_updates.arn
-    }
-    on_success {
-      destination = aws_sns_topic.lambda_status_execution_updates.arn
-    }
-  }
-}
-
-###########################################################################
-########## SNS Topic for Lambda Execution Status Notifications ###########
-###########################################################################
-resource "aws_sns_topic" "lambda_status_execution_updates" {
-  name = "lambda-status-execution-updates"
-
-  tags = {
-    Project     = "cta-analytics-app"
-    Environment = "PROD"
-  }
-}
-
-resource "aws_sns_topic_subscription" "lambda_execution_status_email_subscription" {
-  topic_arn = aws_sns_topic.lambda_status_execution_updates.arn
-  protocol  = "email"
-  endpoint  = var.notification_email
 }
 
 ###########################################################################
@@ -260,18 +217,6 @@ data "aws_iam_policy_document" "gtfs_expected_schedule_lambda_policy_document" {
       "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/gtfs-expected-schedule:*"
     ]
   }
-
-  statement {
-    effect = "Allow"
-
-    actions = [
-      "sns:Publish"
-    ]
-
-    resources = [
-      aws_sns_topic.lambda_status_execution_updates.arn
-    ]
-  }
 }
 
 resource "aws_iam_role_policy" "gtfs_expected_schedule_lambda_policy" {
@@ -298,19 +243,6 @@ resource "aws_lambda_function" "gtfs_expected_schedule_lambda" {
   tags = {
     Project     = "cta-train-metrics"
     Environment = "PROD"
-  }
-}
-
-resource "aws_lambda_function_event_invoke_config" "gtfs_expected_schedule_invoke_config" {
-  function_name = aws_lambda_function.gtfs_expected_schedule_lambda.function_name
-
-  destination_config {
-    on_failure {
-      destination = aws_sns_topic.lambda_status_execution_updates.arn
-    }
-    on_success {
-      destination = aws_sns_topic.lambda_status_execution_updates.arn
-    }
   }
 }
 
@@ -366,40 +298,82 @@ resource "aws_sfn_state_machine" "gtfs_lambda_orchestrator" {
   name     = "gtfs-lambda-orchestrator"
   role_arn = aws_iam_role.step_functions_role.arn
 
-  definition = jsonencode({
-    StartAt = "Lambda1"
-    States = {
-      Lambda1 = {
-        Type     = "Task"
-        Resource = aws_lambda_function.gtfs_data_fetch_lambda.arn
-        Next     = "FileCheckChoice"
-      }
-      FileCheckChoice = {
-        Type = "Choice"
-        Choices = [
-          {
-            Variable     = "$.status"
-            StringEquals = "updated"
-            Next         = "Lambda2"
-          }
-        ]
-        Default = "Done"
-      }
-      Lambda2 = {
-        Type     = "Task"
-        Resource = aws_lambda_function.gtfs_expected_schedule_lambda.arn
-        End      = true
-      }
-      Done = {
-        Type = "Succeed"
+  definition = jsonencode(
+    {
+      "StartAt": "Lambda1",
+      "States": {
+        "Lambda1": {
+          "Type": "Task",
+          "Resource": "arn:aws:states:::lambda:invoke",
+          "Parameters": {
+            "FunctionName": "${aws_lambda_function.gtfs_data_fetch_lambda.arn}"
+          },
+          "Catch": [{
+            "ErrorEquals": ["States.ALL"],
+            "Next": "NotifyFailure"
+          }],
+          "Next": "FileCheckChoice"
+        },
+        "FileCheckChoice": {
+          "Type": "Choice",
+          "Choices": [{
+            "Variable": "$.Payload.status", 
+            "StringEquals": "updated",
+            "Next": "Lambda2"
+          }],
+          "Default": "Done"
+        },
+        "Lambda2": {
+          "Type": "Task",
+          "Resource": "arn:aws:states:::lambda:invoke",
+          "Parameters": {
+            "FunctionName": "${aws_lambda_function.gtfs_expected_schedule_lambda.arn}"
+          },
+          "Catch": [{
+            "ErrorEquals": ["States.ALL"],
+            "Next": "NotifyFailure"
+          }],
+          "End": true
+        },
+        "NotifyFailure": {
+          "Type": "Task",
+          "Resource": "arn:aws:states:::sns:publish",
+          "Parameters": {
+            "TopicArn": "${aws_sns_topic.lambda_orchestrator_execution_updates.arn}",
+            "Message": "The GTFS pipeline failed in the Step Function.",
+            "Subject": "Alert: GTFS Pipeline Failure"
+          },
+          "End": true
+        },
+        "Done": {
+          "Type": "Succeed"
+        }
       }
     }
-  })
+  )
 
   tags = {
     Project     = "cta-train-metrics"
     Environment = "PROD"
   }
+}
+
+###########################################################################
+############ SNS Topic for Lambda Orchestrator Notifications ##############
+###########################################################################
+resource "aws_sns_topic" "lambda_orchestrator_execution_updates" {
+  name = "lambda-orchestrator-execution-updates"
+
+  tags = {
+    Project     = "cta-analytics-app"
+    Environment = "PROD"
+  }
+}
+
+resource "aws_sns_topic_subscription" "lambda_orchestrator_status_email_subscription" {
+  topic_arn = aws_sns_topic.lambda_orchestrator_execution_updates.arn
+  protocol  = "email"
+  endpoint  = var.notification_email
 }
 
 ###########################################################################
