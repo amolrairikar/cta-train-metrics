@@ -286,6 +286,18 @@ data "aws_iam_policy_document" "gtfs_sfn_policy_document" {
       aws_lambda_function.gtfs_expected_schedule_lambda.arn
     ]
   }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "sns:Publish"
+    ]
+
+    resources = [
+      aws_sns_topic.lambda_orchestrator_execution_updates.arn
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "gtfs_sfn_policy" {
