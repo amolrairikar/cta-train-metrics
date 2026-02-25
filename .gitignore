@@ -217,3 +217,5 @@ terraform.tfvars
 # Lambda deployment packages
 lambdas/*/deployment_package.zip
 
+# Streamlit secrets
+secrets.toml

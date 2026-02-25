@@ -3,7 +3,6 @@ import streamlit as st
 st.title('Chicago "L" Train Service Analytics')
 
 st.header("Background")
-
 st.markdown(
     """
     The Chicago Transit Authority (CTA) publishes General Transit Feed Specification (GTFS) data
@@ -19,7 +18,6 @@ st.markdown(
 )
 
 st.header("Methodology")
-
 st.markdown(
     """
     The CTA API has a Locations API [endpoint](https://www.transitchicago.com/developers/ttdocs/#locations) 
@@ -29,7 +27,8 @@ st.markdown(
     appears for that run. For example, if Blue Line run #100 has `arrT: 2026-02-24T13:24:17` for the Grand station and 
     the next minute has `arrT: 2026-02-24T13:26:17` for the Chicago station, we can assume that the train arrived 
     at the Grand station at 1:24pm. We can then compare these estimated arrivals to the scheduled "L" train service 
-    constructed from GTFS data to assess whether a scheduled train service had a corresponding live train run.
+    constructed from GTFS data to assess whether a scheduled train service had a corresponding live train run, and 
+    whether the live train run was on-time or delayed.
     """
 )
 
