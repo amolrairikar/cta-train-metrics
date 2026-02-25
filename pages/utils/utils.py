@@ -22,10 +22,12 @@ def load_s3_parquet_data(s3_path: str) -> pd.DataFrame:
     con = duckdb.connect(database=":memory:")
 
     # Configure S3 credentials (or use PROVIDER CREDENTIAL_CHAIN for auto-auth)
-    con.execute("""
+    con.execute(f"""
         CREATE OR REPLACE SECRET s3_creds (
-            TYPE S3, 
-            PROVIDER CREDENTIAL_CHAIN
+            TYPE S3,
+            KEY_ID '{st.secrets["aws"]["aws_access_key_id"]}',
+            SECRET '{st.secrets["aws"]["aws_secret_access_key"]}',
+            REGION '{st.secrets["aws"]["aws_region"]}'
         );
     """)
 
