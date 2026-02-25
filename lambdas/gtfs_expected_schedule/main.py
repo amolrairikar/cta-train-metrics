@@ -31,8 +31,19 @@ def get_db_connection() -> duckdb.DuckDBPyConnection:
     """
     con = duckdb.connect(database=":memory:")
 
+    # Set the home directory to /tmp, which is writable in Lambda
+    con.execute("SET home_directory='/tmp';")
+
+    # Explicitly set paths for extensions and secrets
+    con.execute("SET extension_directory='/tmp/duckdb_extensions';")
+    con.execute("SET secret_directory='/tmp/duckdb_secrets';")
+
+    # Explicitly install and load httpfs
+    con.execute("INSTALL httpfs;")
+    con.execute("LOAD httpfs;")
+
     # Register the credential chain. This automatically looks for ~/.aws/credentials (local)
-    # or execution role (Lambda/EC2)
+    # or IAM user credentials (Streamlit)
     con.execute("""
         CREATE OR REPLACE SECRET s3_creds (
             TYPE S3, 

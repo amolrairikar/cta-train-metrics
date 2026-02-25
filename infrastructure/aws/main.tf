@@ -20,7 +20,7 @@ locals {
 ###########################################################################
 ####################### S3 bucket for file storage ########################
 ###########################################################################
-resource "aws_s3_bucket" "state_bucket" {
+resource "aws_s3_bucket" "application_bucket" {
   bucket = "${local.account_id}-cta-analytics-project"
 
   tags = {
@@ -30,14 +30,14 @@ resource "aws_s3_bucket" "state_bucket" {
 }
 
 resource "aws_s3_bucket_versioning" "state_bucket_versioning" {
-  bucket = aws_s3_bucket.state_bucket.id
+  bucket = aws_s3_bucket.application_bucket.id
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_public_access_block" "s3_public_access_block" {
-  bucket = aws_s3_bucket.state_bucket.id
+  bucket = aws_s3_bucket.application_bucket.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -49,7 +49,7 @@ resource "aws_s3_bucket_public_access_block" "s3_public_access_block" {
 resource "aws_s3_bucket_lifecycle_configuration" "s3_expire_old_versions" {
   depends_on = [aws_s3_bucket_versioning.state_bucket_versioning]
 
-  bucket = aws_s3_bucket.state_bucket.id
+  bucket = aws_s3_bucket.application_bucket.id
 
   rule {
     id     = "expire_noncurrent_versions"
@@ -450,5 +450,152 @@ resource "aws_scheduler_schedule" "gtfs_data_fetch_schedule" {
   target {
     arn      = aws_sfn_state_machine.gtfs_lambda_orchestrator.arn
     role_arn = aws_iam_role.gtfs_data_fetch_scheduler_role.arn
+  }
+}
+
+###########################################################################
+######################### Train Locations Lambda ##########################
+###########################################################################
+resource "aws_iam_role" "cta_get_train_locations_role" {
+  name               = "cta-get-train-locations-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role_policy.json
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+data "aws_iam_policy_document" "cta_get_train_locations_lambda_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "firehose:PutRecord"
+    ]
+
+    resources = [
+      aws_kinesis_firehose_delivery_stream.cta_train_locations_stream.arn
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = [
+      "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/cta-get-train-locations:*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "cta_get_train_locations_lambda_policy" {
+  name   = "cta-get-train-locations-lambda-policy"
+  role   = aws_iam_role.cta_get_train_locations_role.id
+  policy = data.aws_iam_policy_document.cta_get_train_locations_lambda_policy_document.json
+}
+
+resource "aws_lambda_function" "cta_get_train_locations_lambda" {
+  function_name                  = "cta-get-train-locations"
+  description                    = "Lambda function to make CTA API request to fetch train locations"
+  role                           = aws_iam_role.cta_get_train_locations_role.arn
+  handler                        = "main.handler"
+  runtime                        = "python3.13"
+  filename                       = "../../lambdas/train_location_fetch/deployment_package.zip"
+  source_code_hash               = filebase64sha256("../../lambdas/train_location_fetch/deployment_package.zip")
+  timeout                        = 60
+  memory_size                    = 2048
+  environment {
+    variables = {
+      API_KEY = var.api_key
+    }
+  }
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+###########################################################################
+######################## Firehose Delivery Stream #########################
+###########################################################################
+data "aws_iam_policy_document" "firehose_assume_role_policy" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["firehose.amazonaws.com"]
+    }
+
+    actions = [
+      "sts:AssumeRole"
+    ]
+  }
+}
+
+resource "aws_iam_role" "cta_firehose_role" {
+  name               = "cta-firehose-role"
+  assume_role_policy = data.aws_iam_policy_document.firehose_assume_role_policy.json
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+data "aws_iam_policy_document" "cta_firehose_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:GetBucketLocation",
+      "s3:GetObject",
+      "s3:ListBucket",
+      "s3:ListBucketMultipartUploads",
+      "s3:PutObject"
+    ]
+
+    resources = [
+      aws_s3_bucket.application_bucket.arn,
+      "${aws_s3_bucket.application_bucket.arn}/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "cta_firehose_policy" {
+  name   = "cta-firehose-policy"
+  role   = aws_iam_role.cta_firehose_role.id
+  policy = data.aws_iam_policy_document.cta_firehose_policy_document.json
+}
+
+resource "aws_kinesis_firehose_delivery_stream" "cta_train_locations_stream" {
+  name        = "cta-train-locations-stream"
+  destination = "extended_s3"
+
+  extended_s3_configuration {
+    role_arn   = aws_iam_role.cta_firehose_role.arn
+    bucket_arn = aws_s3_bucket.application_bucket.arn
+
+    # Buffer conditions: 
+    # Firehose will flush to S3 if EITHER 128MB is reached OR 900 seconds (15 minutes) have passed.
+    buffering_size     = 128
+    buffering_interval = 900
+
+    # Enable compression to save on storage costs
+    compression_format = "GZIP"
+
+    # Add prefixing for better S3 organization (e.g., date-based partitioning)
+    prefix              = "raw-api-data/success/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+    error_output_prefix = "raw-api-data/errors/!{firehose:error-output-type}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
+  }
+
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
   }
 }
