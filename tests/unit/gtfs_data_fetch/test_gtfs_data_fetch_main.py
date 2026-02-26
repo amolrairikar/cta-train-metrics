@@ -15,6 +15,12 @@ from lambdas.gtfs_data_fetch.main import (
 )
 
 
+@pytest.fixture(autouse=True)
+def mock_env_vars(monkeypatch):
+    """Fixture to mock environment variables."""
+    monkeypatch.setenv("ACCOUNT_NUMBER", "123456789012")
+
+
 class TestGetLastModifiedTime(unittest.TestCase):
     """Class for testing get_last_modified_time function."""
 
@@ -119,7 +125,6 @@ class TestUploadGtfsZipToS3(unittest.TestCase):
 
     @patch("lambdas.gtfs_data_fetch.main.boto3.client")
     @patch("lambdas.gtfs_data_fetch.main.zipfile.ZipFile")
-    @patch.dict("os.environ", {"ACCOUNT_NUMBER": "123456789"})
     def test_upload_zip_success(self, mock_zip_file, mock_client):
         """Tests successfully uploading GTFS zip to S3."""
         # Arrange
@@ -139,19 +144,20 @@ class TestUploadGtfsZipToS3(unittest.TestCase):
         mock_zip_ref.open.return_value.__enter__.return_value = b"file content"
         mock_zip_file.return_value = mock_zip_ref
 
+        mock_bucket = "123456789-cta-analytics-project"
+
         # Act
-        upload_gtfs_zip_to_s3(mock_response)
+        upload_gtfs_zip_to_s3(bucket_name=mock_bucket, response=mock_response)
 
         # Assert
         mock_s3_client.upload_fileobj.assert_called_once_with(
             Fileobj=mock_zip_ref.open.return_value.__enter__.return_value,
-            Bucket="123456789-cta-analytics-project",
+            Bucket=mock_bucket,
             Key="gtfs_data/test_file.txt",
         )
 
     @patch("lambdas.gtfs_data_fetch.main.boto3.client")
     @patch("lambdas.gtfs_data_fetch.main.zipfile.ZipFile")
-    @patch.dict("os.environ", {"ACCOUNT_NUMBER": "123456789"})
     def test_upload_zip_partial_success(self, mock_zip_file, mock_client):
         """Tests partial success uploading GTFS zip to S3."""
         # Arrange
@@ -186,25 +192,26 @@ class TestUploadGtfsZipToS3(unittest.TestCase):
         mock_zip_ref.open.return_value.__enter__.return_value = b"file content"
         mock_zip_file.return_value = mock_zip_ref
 
+        mock_bucket = "123456789-cta-analytics-project"
+
         # Act
-        upload_gtfs_zip_to_s3(mock_response)
+        upload_gtfs_zip_to_s3(bucket_name=mock_bucket, response=mock_response)
 
         # Assert
         self.assertEqual(mock_s3_client.upload_fileobj.call_count, 2)
         mock_s3_client.upload_fileobj.assert_any_call(
             Fileobj=mock_zip_ref.open.return_value.__enter__.return_value,
-            Bucket="123456789-cta-analytics-project",
+            Bucket=mock_bucket,
             Key="gtfs_data/file1.txt",
         )
         mock_s3_client.upload_fileobj.assert_any_call(
             Fileobj=mock_zip_ref.open.return_value.__enter__.return_value,
-            Bucket="123456789-cta-analytics-project",
+            Bucket=mock_bucket,
             Key="gtfs_data/file2.txt",
         )
 
     @patch("lambdas.gtfs_data_fetch.main.boto3.client")
     @patch("lambdas.gtfs_data_fetch.main.zipfile.ZipFile")
-    @patch.dict("os.environ", {"ACCOUNT_NUMBER": "123456789"})
     def test_upload_zip_skips_directories(self, mock_zip_file, mock_client):
         """Tests that directories within the zip are skipped."""
         # Arrange
@@ -223,8 +230,10 @@ class TestUploadGtfsZipToS3(unittest.TestCase):
         mock_zip_ref.__enter__.return_value = mock_zip_ref
         mock_zip_file.return_value = mock_zip_ref
 
+        mock_bucket = "123456789-cta-analytics-project"
+
         # Act
-        upload_gtfs_zip_to_s3(mock_response)
+        upload_gtfs_zip_to_s3(bucket_name=mock_bucket, response=mock_response)
 
         # Assert
         mock_s3_client.upload_fileobj.assert_not_called()
@@ -232,7 +241,6 @@ class TestUploadGtfsZipToS3(unittest.TestCase):
 
     @patch("lambdas.gtfs_data_fetch.main.boto3.client")
     @patch("lambdas.gtfs_data_fetch.main.zipfile.ZipFile")
-    @patch.dict("os.environ", {"ACCOUNT_NUMBER": "123456789"})
     def test_upload_zip_no_files_present(self, mock_zip_file, mock_client):
         """Tests no files are uploaded to S3 when the zip is empty."""
         # Arrange
@@ -247,8 +255,10 @@ class TestUploadGtfsZipToS3(unittest.TestCase):
         mock_zip_ref.__enter__.return_value = mock_zip_ref
         mock_zip_file.return_value = mock_zip_ref
 
+        mock_bucket = "123456789-cta-analytics-project"
+
         # Act
-        upload_gtfs_zip_to_s3(mock_response)
+        upload_gtfs_zip_to_s3(bucket_name=mock_bucket, response=mock_response)
 
         # Assert
         mock_s3_client.upload_fileobj.assert_not_called()
@@ -291,7 +301,10 @@ class TestLambdaHandler(unittest.TestCase):
             "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
         )
         mock_get_last_modified.assert_called_once()
-        mock_upload.assert_called_once_with(response=mock_response)
+        mock_upload.assert_called_once_with(
+            bucket_name="123456789012-cta-analytics-project",
+            response=mock_response,
+        )
         mock_update.assert_called_once_with("2026-02-23T15:00:00")
         self.assertEqual(
             result,

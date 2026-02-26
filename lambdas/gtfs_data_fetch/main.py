@@ -69,15 +69,15 @@ def update_last_modified_time(last_modified_time: str):
         raise e
 
 
-def upload_gtfs_zip_to_s3(response: requests.Response):
+def upload_gtfs_zip_to_s3(bucket_name: str, response: requests.Response):
     """
     Upload the contents of the GTFS zip file to S3.
 
     Args:
+        bucket_name (str): The name of the S3 bucket to upload files to.
         response (requests.Response): The HTTP response containing the raw GTFS zip file data.
     """
     s3_client = boto3.client("s3")
-    bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
 
     # Use BytesIO to handle the stream in memory
     with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
@@ -128,6 +128,8 @@ def handler(event, context) -> dict[str, str]:
     # Only needed for local testing, will do nothing in Lambda environment
     dotenv.load_dotenv()
 
+    bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
+
     logger.info("Making request to fetch GTFS data from CTA.")
     response = requests.get(
         "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
@@ -159,7 +161,7 @@ def handler(event, context) -> dict[str, str]:
         logger.info(
             "GTFS data has been updated since last fetch. Writing updated GTFS data to S3."
         )
-        upload_gtfs_zip_to_s3(response=response)
+        upload_gtfs_zip_to_s3(bucket_name=bucket_name, response=response)
         logger.info("Successfully wrote updated GTFS data to S3.")
         logger.info("Updating GTFS data last modified time in Parameter Store.")
         update_last_modified_time(last_modified_dt.strftime("%Y-%m-%dT%H:%M:%S"))
