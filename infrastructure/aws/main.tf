@@ -24,7 +24,7 @@ resource "aws_s3_bucket" "application_bucket" {
   bucket = "${local.account_id}-cta-analytics-project"
 
   tags = {
-    Project     = "cta-analytics-app"
+    Project     = "cta-train-metrics"
     Environment = "PROD"
   }
 }
@@ -377,7 +377,7 @@ resource "aws_sns_topic" "lambda_orchestrator_execution_updates" {
   name = "lambda-orchestrator-execution-updates"
 
   tags = {
-    Project     = "cta-analytics-app"
+    Project     = "cta-train-metrics"
     Environment = "PROD"
   }
 }
