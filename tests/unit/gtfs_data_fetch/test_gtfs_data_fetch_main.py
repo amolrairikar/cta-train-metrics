@@ -67,6 +67,11 @@ class TestGetLastModifiedTime(unittest.TestCase):
         with pytest.raises(botocore.exceptions.ClientError):
             get_last_modified_time()
 
+        mock_client.return_value.get_parameter.assert_called_with(
+            Name="gtfs_last_modified_time",
+            WithDecryption=False,
+        )
+
 
 class TestUpdateLastModifiedTime(unittest.TestCase):
     """Class for testing update_last_modified_time function."""

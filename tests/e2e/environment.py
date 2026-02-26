@@ -53,3 +53,9 @@ def after_all(context: Context):
         FunctionName="gtfs-data-fetch",
         Environment={"Variables": {"ACCOUNT_NUMBER": os.environ["ACCOUNT_NUMBER"]}},
     )
+
+    # Restore the original environment variable for the cta-get-train-locations lambda
+    lambda_client.update_function_configuration(
+        FunctionName="cta-get-train-locations",
+        Environment={"Variables": {"CTA_API_KEY": os.environ["API_KEY"]}},
+    )

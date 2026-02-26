@@ -389,6 +389,48 @@ resource "aws_sns_topic_subscription" "lambda_orchestrator_status_email_subscrip
 }
 
 ###########################################################################
+#################### SQS Queue for End-to-End Testing #####################
+###########################################################################
+
+resource "aws_sqs_queue" "end_to_end_testing_queue" {
+  name      = "e2e-testing-queue"
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+resource "aws_sqs_queue_policy" "example" {
+  queue_url = aws_sqs_queue.end_to_end_testing_queue.id
+
+  policy = jsonencode({
+    Version = "2012-10-17" # !! Important !!
+    Statement = [{
+      Sid    = "Allow-SNS-SendMessage"
+      Effect = "Allow"
+
+      Principal = {
+        Service = "sns.amazonaws.com"
+      }
+      Action   = "SQS:SendMessage"
+      Resource = aws_sqs_queue.end_to_end_testing_queue.arn
+
+      Condition = {
+        ArnLike = {
+          "aws:SourceArn" = aws_sns_topic.lambda_orchestrator_execution_updates.arn
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_sns_topic_subscription" "e2e_testing_subscription" {
+  topic_arn = aws_sns_topic.lambda_orchestrator_execution_updates.arn
+  protocol  = "sqs"
+  endpoint  = aws_sqs_queue.end_to_end_testing_queue.arn
+}
+
+###########################################################################
 ######################## GTFS Data SFN Scheduler ##########################
 ###########################################################################
 
@@ -511,7 +553,7 @@ resource "aws_lambda_function" "cta_get_train_locations_lambda" {
   memory_size                    = 2048
   environment {
     variables = {
-      API_KEY = var.api_key
+      CTA_API_KEY = var.api_key
     }
   }
   tags = {

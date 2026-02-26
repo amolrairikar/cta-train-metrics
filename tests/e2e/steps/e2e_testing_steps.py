@@ -7,6 +7,7 @@ import os
 import time
 
 import boto3
+import requests
 from behave import given, then, when, use_step_matcher
 from behave.runner import Context
 from dotenv import load_dotenv
@@ -108,67 +109,14 @@ def check_existing_gtfs_processed_schedule_data_s3(context: Context):
 
 
 @given("we are subscribed to orchestrator failure notifications")  # type: ignore[reportCallIssue]
-def create_sqs_subscription_to_sns(context: Context):
+def store_sqs_queue_url(context: Context):
     """
-    Create an SQS queue for duration of the test and subscribe it to the SNS topic that sends
-    failure notifications for Step Function failed states.
+    Set the SQS queue URL used for end-to-end testing in the behave context object.
 
     Args:
         context: The Behave context object.
     """
-    sqs_client = boto3.client("sqs")
-
-    # Initial queue creation
-    create_queue_response = sqs_client.create_queue(
-        QueueName="e2e-sfn-failure-test-queue",
-        tags={
-            "Project": "cta-train-metrics",
-            "Environment": "PROD",
-        },
-    )
-    queue_url = create_queue_response.get("QueueUrl")
-    assert queue_url is not None, "Error creating SQS queue for E2E tests."
-    context.queue_url = queue_url
-
-    # Get the queue ARN
-    get_queue_attributes_response = sqs_client.get_queue_attributes(
-        QueueUrl=queue_url,
-        AttributeNames=["QueueArn"],
-    )
-    print(get_queue_attributes_response)
-    queue_arn = get_queue_attributes_response["Attributes"].get("QueueArn")
-    assert queue_arn is not None, f"Unable to get ARN for {queue_url}."
-
-    # Attach policy to queue allowing SNS to send messages
-    sns_topic_arn = f"arn:aws:sns:us-east-1:{os.environ['ACCOUNT_NUMBER']}:lambda-orchestrator-execution-updates"
-    sqs_policy = {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Sid": "Allow-SNS-SendMessage",
-                "Effect": "Allow",
-                "Principal": {"Service": "sns.amazonaws.com"},
-                "Action": "sqs:SendMessage",
-                "Resource": queue_arn,
-                "Condition": {"ArnEquals": {"aws:SourceArn": sns_topic_arn}},
-            }
-        ],
-    }
-    sqs_client.set_queue_attributes(
-        QueueUrl=queue_url, Attributes={"Policy": json.dumps(sqs_policy)}
-    )
-
-    # Subscribe queue to SNS topic
-    sns_client = boto3.client("sns")
-    subscribe_response = sns_client.subscribe(
-        TopicArn=sns_topic_arn,
-        Protocol="sqs",
-        Endpoint=queue_arn,
-        ReturnSubscriptionArn=True,
-    )
-    assert subscribe_response["SubscriptionArn"] is not None, (
-        "Failed to subscribe SQS queue to SNS topic."
-    )
+    context.queue_url = f"https://sqs.us-east-1.amazonaws.com/{os.environ['ACCOUNT_NUMBER']}/e2e-testing-queue"
 
 
 # Force 'parse' matcher since the matcher was initially set to 're'
@@ -187,7 +135,7 @@ def update_lambda_environment_variable(context: Context, lambda_name: str):
     """
     lambda_client = boto3.client("lambda")
     lambda_client.update_function_configuration(
-        FunctionName="gtfs-data-fetch",
+        FunctionName=lambda_name,
         Environment={"Variables": {}},
     )
     waiter = lambda_client.get_waiter("function_updated_v2")
@@ -198,6 +146,29 @@ def update_lambda_environment_variable(context: Context, lambda_name: str):
     print(final_config)
     assert final_config.get("Environment") is None, (
         "Failed to delete Lambda environment variable."
+    )
+
+
+@given("the CTA Train Locations API is available")  # type: ignore[reportCallIssue]
+def check_cta_api_availability(context: Context):
+    """
+    Makes a test request to the CTA Train Locations API to validate the API service is up.
+
+    Args:
+        context: The Behave context object.
+    """
+    response = requests.get(
+        url="http://lapi.transitchicago.com/api/1.0/ttpositions.aspx",
+        params={
+            "rt": "g",
+            "key": os.environ["API_KEY"],
+            "outputType": "JSON",
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    assert response.status_code == 200, (
+        f"API request was successfull but returned {response.status_code} code instead of 200 code."
     )
 
 
@@ -217,6 +188,27 @@ def trigger_step_function(context: Context):
     assert response["executionArn"] is not None, (
         "Could not find execution ARN for triggered execution."
     )
+
+
+@when("we trigger the {lambda_name} lambda function")  # type: ignore[reportCallIssue]
+def trigger_lambda(context: Context, lambda_name: str):
+    """
+    Trigger the lambda function with `lambda_name` and wait for it to complete.
+
+    Args:
+        context: The Behave context object.
+        lambda_name: The name of the Lambda function to trigger.
+    """
+    lambda_client = boto3.client("lambda")
+    response = lambda_client.invoke(
+        FunctionName=lambda_name,
+        InvocationType="RequestResponse",
+        LogType="Tail",
+        Payload=json.dumps({"test": "event"}).encode("utf-8"),
+    )
+
+    # Store response for later assertions
+    context.response = response
 
 
 @then("the orchestrator will have status {expected_status}")  # type: ignore[reportCallIssue]
@@ -332,6 +324,10 @@ def poll_sqs_queue(context: Context):
         )
         if response["Messages"]:
             found_message = response["Messages"][0]
+            receipt_handle = response["Messages"][0]["ReceiptHandle"]
+            sqs_client.delete_message(
+                QueueUrl=context.queue_url, ReceiptHandle=receipt_handle
+            )
             break
         attempts += 1
         print(f"Did not find messages on attempt {attempts}. Retrying...")
@@ -346,3 +342,26 @@ def poll_sqs_queue(context: Context):
     assert actual_subject == expected_subject, (
         f"Expected subject '{expected_subject}', but got '{actual_subject}'"
     )
+
+
+@then(r"the function will (succeed|fail)")  # type: ignore[reportCallIssue]
+def check_lambda_status(context: Context, expected_result: str):
+    """
+    Check the response from the Lambda invocation to see if the function succeeded
+    or failed as expected.
+
+    Args:
+        context: The Behave context object.
+        expected_result: The expected result from the Lambda execution (`succeed` or `fail`).
+    """
+    lambda_response = json.loads(context.response["Payload"].read().decode("utf-8"))
+    assert context.response["ResponseMetadata"]["HTTPStatusCode"] == 200
+    if expected_result == "succeed":
+        assert "FunctionError" not in context.response, (
+            f"Lambda failed with error: {lambda_response}"
+        )
+        assert lambda_response["status"] == "success"
+        assert lambda_response["count"] == 8
+    else:
+        assert "FunctionError" in context.response
+        assert lambda_response["errorType"] == "KeyError"

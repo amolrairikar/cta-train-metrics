@@ -4,6 +4,7 @@ is sent to Firehose for batch loading to S3.
 """
 
 import concurrent.futures
+import datetime
 import json
 import logging
 import os
@@ -24,16 +25,16 @@ stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 logger.setLevel(logging.DEBUG)
 
-API_KEY = os.environ["CTA_API_KEY"]
 API_BASE_URL = "http://lapi.transitchicago.com/api/1.0/ttpositions.aspx"
 
 
-def fetch_cta_data(line: str) -> dict:
+def fetch_cta_data(line: str, api_key: str) -> dict:
     """
     Function to fetch location data for a single train line.
 
     Args:
         line: The name of the train line for the API request.
+        api_key: The CTA API key to use for authenticated API requests.
 
     Returns:
         dict: The JSON API response.
@@ -42,7 +43,7 @@ def fetch_cta_data(line: str) -> dict:
         url=API_BASE_URL,
         params={
             "rt": line,
-            "key": API_KEY,
+            "key": api_key,
             "outputType": "JSON",
         },
         timeout=10,
@@ -93,12 +94,14 @@ def handler(event, context):
         "red",
         "y",
     ]
+    current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     all_data = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_url = {
-            executor.submit(fetch_cta_data, line): line for line in train_lines
+            executor.submit(fetch_cta_data, line, os.environ["CTA_API_KEY"]): line
+            for line in train_lines
         }
 
         for future in concurrent.futures.as_completed(future_to_url):
@@ -110,7 +113,7 @@ def handler(event, context):
 
     # Aggregate and send to Firehose as a single newline-delimited JSON record.
     # Firehose requires sending as a single newline-delimited JSON record or a bundled object.
-    payload = json.dumps({"timestamp": "...", "data": all_data}) + "\n"
+    payload = json.dumps({"timestamp": current_time, "data": all_data}) + "\n"
     write_to_firehose(payload=payload)
 
     return {"status": "success", "count": len(all_data)}
