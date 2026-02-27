@@ -33,6 +33,12 @@ def before_all(context: Context):
         f"Current value of gtfs_last_modified_time: {context.current_last_modified_time}"
     )
 
+    # Purge the SQS queue designd for E2E testing to ensure no unrelated messages are present
+    sqs_client = boto3.client("sqs")
+    queue_url = f"https://sqs.us-east-1.amazonaws.com/{os.environ['ACCOUNT_NUMBER']}/e2e-testing-queue"
+    sqs_client.purge_queue(QueueUrl=queue_url)
+    print("Successfully purged E2E testing SQS queue.")
+
 
 def after_all(context: Context):
     """
