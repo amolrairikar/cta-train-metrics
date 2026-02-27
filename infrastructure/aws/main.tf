@@ -78,6 +78,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "s3_expire_old_versions" {
       days_after_initiation = 7
     }
   }
+
+  rule {
+    id     = "expire_raw_api_data"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw-api-data/"
+    }
+
+    expiration {
+      days = 7
+    }
+  }
 }
 
 ###########################################################################
@@ -550,7 +563,7 @@ resource "aws_lambda_function" "cta_get_train_locations_lambda" {
   filename                       = "../../lambdas/train_location_fetch/deployment_package.zip"
   source_code_hash               = filebase64sha256("../../lambdas/train_location_fetch/deployment_package.zip")
   timeout                        = 60
-  memory_size                    = 2048
+  memory_size                    = 256
   environment {
     variables = {
       CTA_API_KEY = var.api_key
@@ -559,6 +572,75 @@ resource "aws_lambda_function" "cta_get_train_locations_lambda" {
   tags = {
     Project     = "cta-train-metrics"
     Environment = "PROD"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_error_alarm" {
+  alarm_name          = "train-location-lambda-error-threshold-alarm"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 600  # 10 minutes
+  statistic           = "Sum"
+  threshold           = 5
+  alarm_description   = "This alarm monitors lambda errors and triggers if they exceed 5 in 10 minutes."
+  
+  # Map the alarm to your specific function
+  dimensions = {
+    FunctionName = "cta-get-train-locations"
+  }
+
+  # Action to take when alarm state is reached
+  alarm_actions = [aws_sns_topic.lambda_orchestrator_execution_updates.arn]
+}
+
+###########################################################################
+######################### Eventbridge Scheduler ###########################
+###########################################################################
+resource "aws_iam_role" "get_train_locations_eventbridge_role" {
+  name               = "cta-get-train-locations-eventbridge-role"
+  assume_role_policy = data.aws_iam_policy_document.scheduler_assume_role_policy.json
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+data "aws_iam_policy_document" "get_train_locations_eventbridge_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "lambda:InvokeFunction"
+    ]
+
+    resources = [
+      "arn:aws:lambda:us-east-1:${local.account_id}:function:cta-get-train-locations"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "cta_get_train_locations_eventbridge_role_policy" {
+  name   = "cta-get-train-locations-eventbridge-role-policy"
+  role   = aws_iam_role.get_train_locations_eventbridge_role.id
+  policy = data.aws_iam_policy_document.get_train_locations_eventbridge_policy_document.json
+}
+
+resource "aws_scheduler_schedule" "cta_get_train_locations_trigger" {
+  name                         = "cta-get-train-locations-trigger"
+  group_name                   = "default"
+  state                        = "ENABLED"
+  schedule_expression          = "rate(1 minute)"
+  schedule_expression_timezone = "America/Chicago"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = aws_lambda_function.cta_get_train_locations_lambda.arn
+    role_arn = aws_iam_role.get_train_locations_eventbridge_role.arn
   }
 }
 
@@ -620,16 +702,16 @@ resource "aws_kinesis_firehose_delivery_stream" "cta_train_locations_stream" {
   destination = "extended_s3"
 
   extended_s3_configuration {
-    role_arn   = aws_iam_role.cta_firehose_role.arn
-    bucket_arn = aws_s3_bucket.application_bucket.arn
+    role_arn            = aws_iam_role.cta_firehose_role.arn
+    bucket_arn          = aws_s3_bucket.application_bucket.arn
 
     # Buffer conditions: 
     # Firehose will flush to S3 if EITHER 128MB is reached OR 900 seconds (15 minutes) have passed.
-    buffering_size     = 128
-    buffering_interval = 900
+    buffering_size      = 128
+    buffering_interval  = 900
 
     # Enable compression to save on storage costs
-    compression_format = "GZIP"
+    compression_format  = "GZIP"
 
     # Add prefixing for better S3 organization (e.g., date-based partitioning)
     prefix              = "raw-api-data/success/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
