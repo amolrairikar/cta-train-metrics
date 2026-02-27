@@ -446,7 +446,6 @@ resource "aws_sns_topic_subscription" "e2e_testing_subscription" {
 ###########################################################################
 ######################## GTFS Data SFN Scheduler ##########################
 ###########################################################################
-
 data "aws_iam_policy_document" "scheduler_assume_role_policy" {
   statement {
     effect = "Allow"
@@ -543,7 +542,8 @@ data "aws_iam_policy_document" "cta_get_train_locations_lambda_policy_document" 
     ]
 
     resources = [
-      "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/cta-get-train-locations:*"
+      "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/cta-get-train-locations:*",
+      "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/cta-get-train-locations-test:*"
     ]
   }
 }
@@ -572,6 +572,27 @@ resource "aws_lambda_function" "cta_get_train_locations_lambda" {
   tags = {
     Project     = "cta-train-metrics"
     Environment = "PROD"
+  }
+}
+
+resource "aws_lambda_function" "cta_get_train_locations_test_lambda" {
+  function_name                  = "cta-get-train-locations-test"
+  description                    = "Lambda function used for testing to make CTA API request to fetch train locations"
+  role                           = aws_iam_role.cta_get_train_locations_role.arn
+  handler                        = "main.handler"
+  runtime                        = "python3.13"
+  filename                       = "../../lambdas/train_location_fetch/deployment_package.zip"
+  source_code_hash               = filebase64sha256("../../lambdas/train_location_fetch/deployment_package.zip")
+  timeout                        = 60
+  memory_size                    = 256
+  environment {
+    variables = {
+      CTA_API_KEY = var.api_key
+    }
+  }
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "DEV"
   }
 }
 

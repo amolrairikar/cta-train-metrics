@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 import boto3
 import botocore.exceptions
@@ -28,29 +29,55 @@ logger.setLevel(logging.DEBUG)
 API_BASE_URL = "http://lapi.transitchicago.com/api/1.0/ttpositions.aspx"
 
 
-def fetch_cta_data(line: str, api_key: str) -> dict:
+def fetch_cta_data(line: str, api_key: str, max_retries: int = 2) -> dict:
     """
-    Function to fetch location data for a single train line.
+    Function to fetch location data for a single train line with retry logic.
 
     Args:
         line: The name of the train line for the API request.
         api_key: The CTA API key to use for authenticated API requests.
+        max_retries: Maximum number of retry attempts for failed requests.
 
     Returns:
         dict: The JSON API response.
+
+    Raises:
+        requests.RequestException: If all retry attempts fail.
     """
-    response = requests.get(
-        url=API_BASE_URL,
-        params={
-            "rt": line,
-            "key": api_key,
-            "outputType": "JSON",
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    logger.info("Successfully fetched data for %s route", line)
-    return response.json()
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(
+                url=API_BASE_URL,
+                params={
+                    "rt": line,
+                    "key": api_key,
+                    "outputType": "JSON",
+                },
+                timeout=5,
+            )
+            response.raise_for_status()
+            logger.info("Successfully fetched data for %s route", line)
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries:
+                wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                logger.warning(
+                    "Request error occurred for %s route (attempt %d/%d): %s. Retrying in %d seconds...",
+                    line,
+                    attempt + 1,
+                    max_retries + 1,
+                    str(e),
+                    wait_time,
+                )
+                time.sleep(wait_time)
+            else:
+                logger.error(
+                    "Request error occurred for %s route after %d attempts: %s",
+                    line,
+                    max_retries + 1,
+                    str(e),
+                )
+                raise
 
 
 def write_to_firehose(payload: str):
@@ -114,6 +141,11 @@ def handler(event, context):
     # Aggregate and send to Firehose as a single newline-delimited JSON record.
     # Firehose requires sending as a single newline-delimited JSON record or a bundled object.
     payload = json.dumps({"timestamp": current_time, "data": all_data}) + "\n"
-    write_to_firehose(payload=payload)
+
+    # Skip Firehose publish for test functions
+    if not context.function_name.endswith("-test"):
+        write_to_firehose(payload=payload)
+    else:
+        logger.info("Test function detected, skipping Firehose publish")
 
     return {"status": "success", "count": len(all_data)}
