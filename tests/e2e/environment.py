@@ -62,6 +62,6 @@ def after_all(context: Context):
 
     # Restore the original environment variable for the cta-get-train-locations lambda
     lambda_client.update_function_configuration(
-        FunctionName="cta-get-train-locations",
+        FunctionName="cta-get-train-locations-test",
         Environment={"Variables": {"CTA_API_KEY": os.environ["API_KEY"]}},
     )

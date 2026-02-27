@@ -11,19 +11,20 @@ import requests
 from lambdas.train_location_fetch.main import fetch_cta_data, write_to_firehose, handler
 
 
-class TestFetchCtaLine(unittest.TestCase):
-    """Class for testing fetch_cta_line function."""
+class TestFetchCtaData(unittest.TestCase):
+    """Class for testing fetch_cta_data function."""
 
     @patch("lambdas.train_location_fetch.main.requests.get")
-    def test_fetch_cta_line_success(self, mock_get):
+    def test_fetch_cta_data_success(self, mock_get):
         """Tests successful API request to CTA API to get train locations."""
         # Arrange
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"data": "test"}
         mock_get.return_value = mock_response
 
         # Act
-        fetch_cta_data(line="test", api_key="test_key")
+        result = fetch_cta_data(line="test", api_key="test_key")
 
         # Assert
         mock_get.assert_called_once_with(
@@ -33,12 +34,14 @@ class TestFetchCtaLine(unittest.TestCase):
                 "key": "test_key",
                 "outputType": "JSON",
             },
-            timeout=10,
+            timeout=5,
         )
+        self.assertEqual(result, {"data": "test"})
 
     @patch("lambdas.train_location_fetch.main.requests.get")
-    def test_fetch_cta_line_failure(self, mock_get):
-        """Tests HTTP error on API request to CTA API to get train locations."""
+    @patch("lambdas.train_location_fetch.main.time.sleep")
+    def test_fetch_cta_data_http_error_exhaust_retries(self, mock_sleep, mock_get):
+        """Tests HTTP error with max retries exhausted."""
         # Arrange
         mock_get.return_value.raise_for_status.side_effect = (
             requests.exceptions.HTTPError("404 Not Found")
@@ -46,18 +49,29 @@ class TestFetchCtaLine(unittest.TestCase):
 
         # Act & Assert
         with pytest.raises(requests.exceptions.HTTPError):
-            fetch_cta_data(line="test", api_key="test_key")
+            fetch_cta_data(line="test", api_key="test_key", max_retries=2)
+
+        self.assertEqual(mock_get.call_count, 3)
+        mock_sleep.assert_any_call(1)
+        mock_sleep.assert_any_call(2)
+
+    @patch("lambdas.train_location_fetch.main.requests.get")
+    @patch("lambdas.train_location_fetch.main.time.sleep")
+    def test_fetch_cta_data_timeout_retry_success(self, mock_sleep, mock_get):
+        """Tests timeout followed by successful retry."""
+        # Arrange
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"data": "retry_success"}
+        mock_get.side_effect = [requests.exceptions.Timeout("Timeout"), mock_response]
+
+        # Act
+        result = fetch_cta_data(line="test", api_key="test_key", max_retries=2)
 
         # Assert
-        mock_get.assert_called_once_with(
-            url="http://lapi.transitchicago.com/api/1.0/ttpositions.aspx",
-            params={
-                "rt": "test",
-                "key": "test_key",
-                "outputType": "JSON",
-            },
-            timeout=10,
-        )
+        self.assertEqual(mock_get.call_count, 2)
+        mock_sleep.assert_called_once_with(1)
+        self.assertEqual(result, {"data": "retry_success"})
 
 
 class TestWriteToFirehose(unittest.TestCase):
@@ -118,12 +132,31 @@ class TestLambdaHandler(unittest.TestCase):
 
     @patch("lambdas.train_location_fetch.main.write_to_firehose")
     @patch("lambdas.train_location_fetch.main.fetch_cta_data")
-    def test_handler_success(self, mock_fetch, mock_firehose):
-        """Tests successful handler execution."""
+    def test_handler_success_test_function(self, mock_fetch, mock_firehose):
+        """Tests successful handler execution for test function (with mocked dependencies)."""
         # Arrange
         mock_fetch.return_value = {"line": "test_line", "trains": []}
         event = {"test": "event"}
         context = MagicMock()
+        context.function_name = "test-function-test"
+
+        # Act
+        result = handler(event=event, context=context)
+
+        # Assert
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["count"], 8)
+        self.assertFalse(mock_firehose.called)
+
+    @patch("lambdas.train_location_fetch.main.write_to_firehose")
+    @patch("lambdas.train_location_fetch.main.fetch_cta_data")
+    def test_handler_success_live_function(self, mock_fetch, mock_firehose):
+        """Tests successful handler execution for live function (with mocked dependencies)."""
+        # Arrange
+        mock_fetch.return_value = {"line": "test_line", "trains": []}
+        event = {"test": "event"}
+        context = MagicMock()
+        context.function_name = "live-function"
 
         # Act
         result = handler(event=event, context=context)
@@ -153,9 +186,11 @@ class TestLambdaHandler(unittest.TestCase):
             {"data": "ok"},
             Exception("API Timeout"),
         ]
+        context = MagicMock()
+        context.function_name = "live-function"
 
         # Act
-        result = handler(event={}, context=None)
+        result = handler(event={}, context=context)
 
         # Assert
         self.assertEqual(result["count"], 7)
