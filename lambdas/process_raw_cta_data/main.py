@@ -1,3 +1,4 @@
+import datetime
 import gzip
 import json
 import logging
@@ -8,6 +9,7 @@ from io import BytesIO
 import boto3
 import botocore.exceptions
 import dotenv
+import duckdb
 import pandas as pd
 
 dotenv.load_dotenv()
@@ -69,21 +71,49 @@ def read_s3_partition(bucket_name: str, partition_path: str) -> list[BytesIO]:
     return file_objects
 
 
+def get_db_connection() -> duckdb.DuckDBPyConnection:
+    """
+    Create DuckDB connection to S3.
+
+    Returns:
+        duckdb.DuckDBPyConnection: The DuckDB connection
+    """
+    con = duckdb.connect(database=":memory:")
+
+    # Set the home directory to /tmp, which is writable in Lambda
+    con.execute("SET home_directory='/tmp';")
+
+    # Explicitly set paths for extensions and secrets
+    con.execute("SET extension_directory='/tmp/duckdb_extensions';")
+    con.execute("SET secret_directory='/tmp/duckdb_secrets';")
+
+    # Explicitly install and load httpfs
+    con.execute("INSTALL httpfs;")
+    con.execute("LOAD httpfs;")
+
+    # Register the credential chain. This automatically looks for ~/.aws/credentials
+    con.execute("""
+        CREATE OR REPLACE SECRET s3_creds (
+            TYPE S3, 
+            PROVIDER CREDENTIAL_CHAIN
+        );
+    """)
+    return con
+
+
 def write_df_to_s3(df: pd.DataFrame, bucket_name: str, key: str):
     """
-    Write a Pandas dataframe to S3.
+    Write a Pandas dataframe to S3 as Parquet using DuckDB.
 
     Args:
         df: The pandas DataFrame to write to S3.
         bucket_name: The name of the S3 bucket.
         key: The key for the object in S3.
     """
-    s3_client = boto3.client("s3")
-    try:
-        s3_client.put_object(Bucket=bucket_name, Key=key, Body=df.to_csv(index=False))
-    except botocore.exceptions.ClientError as e:
-        logger.error(f"Error writing to S3: {e}")
-        raise e
+    output_path = f"s3://{bucket_name}/{key}"
+    con = get_db_connection()
+    con.execute(f"COPY ({df}) TO '{output_path}' (FORMAT PARQUET)")
+    logger.info(f"Successfully wrote output parquet file to S3: {output_path}")
 
 
 def extract_cta_data_from_s3(bucket_name: str, partition_path: str) -> pd.DataFrame:
@@ -218,17 +248,44 @@ def handler(event, context):
     # Only needed for local testing, will do nothing in Lambda environment
     dotenv.load_dotenv()
 
+    # Get current and previous date for partitions to process
+    today_date = datetime.date.today()
+    yesterday_date = today_date - datetime.timedelta(days=1)
+
     bucket_name = f"{os.environ['ACCOUNT_NUMBER']}-cta-analytics-project"
-    partition_path = "raw-api-data/success/year=2026/month=02/day=27/"
+    today_partition_path = f"raw-api-data/success/year={today_date.year}/month={'{:02d}'.format(today_date.month)}/day={today_date.day}/"
+    yesterday_partition_path = f"raw-api-data/success/year={yesterday_date.year}/month={'{:02d}'.format(yesterday_date.month)}/day={yesterday_date.day}/"
 
     logger.info("Extracting CTA train data from S3...")
-    extract_cta_data_from_s3(bucket_name=bucket_name, partition_path=partition_path)
-    # df = extract_cta_data_from_s3(bucket_name=bucket_name, partition_path=partition_path)
+    df_today = extract_cta_data_from_s3(
+        bucket_name=bucket_name, partition_path=today_partition_path
+    )
+    df_yesterday = extract_cta_data_from_s3(
+        bucket_name=bucket_name, partition_path=yesterday_partition_path
+    )
+    df_combined = pd.concat(
+        [df_today, df_yesterday], ignore_index=True
+    ).drop_duplicates()
 
-    logger.info("Writing CTA train data to S3...")
-    # write_df_to_s3(df=df, bucket_name=bucket_name, key="cta_train_data.csv")
+    # Filter for only the previous day of data, using current_timestamp field
+    df_filtered = df_combined
+    logger.info("Writing df locally for testing...")
+    df_filtered.to_csv("output.csv", index=False)
+
+    # logger.info("Writing CTA train data to S3...")
+    # write_df_to_s3(
+    #     df=df,
+    #     bucket_name=bucket_name,
+    #     key=f"raw/{today_date.strftime("%Y-%m-%d")}_cta_train_data.csv"
+    # )
 
     return {
         "status": "success",
         "message": "CTA data processing complete.",
     }
+
+
+handler(
+    event={},
+    context={},
+)

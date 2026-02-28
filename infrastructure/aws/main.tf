@@ -744,3 +744,70 @@ resource "aws_kinesis_firehose_delivery_stream" "cta_train_locations_stream" {
     Environment = "PROD"
   }
 }
+
+###########################################################################
+##################### Process Train Locations Lambda ######################
+###########################################################################
+resource "aws_iam_role" "cta_process_train_locations_role" {
+  name               = "cta-process-train-locations-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role_policy.json
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
+
+data "aws_iam_policy_document" "cta_process_train_locations_lambda_policy_document" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "s3:PutObject"
+    ]
+
+    resources = [
+      "arn:aws:s3:::${local.account_id}-cta-analytics-project/raw/*"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = [
+      "arn:aws:logs:us-east-1:${local.account_id}:log-group:/aws/lambda/cta-process-train-locations:*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "cta_process_train_locations_lambda_policy" {
+  name   = "cta-process-train-locations-lambda-policy"
+  role   = aws_iam_role.cta_process_train_locations_role.id
+  policy = data.aws_iam_policy_document.cta_process_train_locations_lambda_policy_document.json
+}
+
+resource "aws_lambda_function" "cta_process_train_locations_lambda" {
+  function_name                  = "cta-process-train-locations"
+  description                    = "Lambda function to process raw CTA train location data"
+  role                           = aws_iam_role.cta_process_train_locations_role.arn
+  handler                        = "main.handler"
+  runtime                        = "python3.13"
+  filename                       = "../../lambdas/process_raw_cta_data/deployment_package.zip"
+  source_code_hash               = filebase64sha256("../../lambdas/process_raw_cta_data/deployment_package.zip")
+  timeout                        = 60
+  memory_size                    = 512
+  environment {
+    variables = {
+      ACCOUNT_NUMBER = local.account_id
+    }
+  }
+  tags = {
+    Project     = "cta-train-metrics"
+    Environment = "PROD"
+  }
+}
